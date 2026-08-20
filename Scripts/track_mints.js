@@ -1,6 +1,7 @@
+
 import { createPublicClient, http, parseAbiItem } from 'viem';
 
-// Robinhood Chain definition
+// Robinhood Chain definition (Chain ID 4663)
 const robinhoodChain = {
   id: 4663,
   name: 'Robinhood Chain',
@@ -16,54 +17,92 @@ const client = createPublicClient({
   transport: http(),
 });
 
-const TRANSFER_EVENT = parseAbiItem(
+// ERC-721 / ERC-1155 Transfer event signatures
+const ERC721_TRANSFER = parseAbiItem(
   'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)'
+);
+const ERC1155_TRANSFER_SINGLE = parseAbiItem(
+  'event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)'
 );
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
-export async function scanRecentMints(blockRange = 100n) {
+/**
+ * Scan recent blocks on Robinhood Chain for active mint events.
+ * @param {bigint} blockRange - Number of recent blocks to scan (default 200)
+ */
+export async function getActiveRobinhoodMints(blockRange = 200n) {
   const currentBlock = await client.getBlockNumber();
-  const fromBlock = currentBlock - blockRange;
+  const fromBlock = currentBlock > blockRange ? currentBlock - blockRange : 0n;
 
-  const logs = await client.getLogs({
-    event: TRANSFER_EVENT,
+  // Query ERC-721 mint logs
+  const erc721Logs = await client.getLogs({
+    event: ERC721_TRANSFER,
     args: { from: ZERO_ADDRESS },
     fromBlock,
     toBlock: currentBlock,
-  });
+  }).catch(() => []);
 
-  const stats = new Map();
+  // Query ERC-1155 mint logs
+  const erc1155Logs = await client.getLogs({
+    event: ERC1155_TRANSFER_SINGLE,
+    args: { from: ZERO_ADDRESS },
+    fromBlock,
+    toBlock: currentBlock,
+  }).catch(() => []);
 
-  for (const log of logs) {
+  const allLogs = [...erc721Logs, ...erc1155Logs];
+  if (allLogs.length === 0) {
+    return {
+      scannedBlocks: Number(blockRange),
+      latestBlock: Number(currentBlock),
+      activeMints: [],
+    };
+  }
+
+  const contractMap = new Map();
+
+  for (const log of allLogs) {
     const contract = log.address.toLowerCase();
-    const recipient = log.args.to.toLowerCase();
+    const minter = (log.args.to || '').toLowerCase();
 
-    if (!stats.has(contract)) {
-      stats.set(contract, {
+    if (!contractMap.has(contract)) {
+      contractMap.set(contract, {
         contract,
-        totalMints: 0,
+        recentMints: 0,
         uniqueMinters: new Set(),
-        firstSeenBlock: log.blockNumber,
-        lastSeenBlock: log.blockNumber,
+        firstBlock: log.blockNumber,
+        latestBlock: log.blockNumber,
+        txHashes: new Set(),
       });
     }
 
-    const item = stats.get(contract);
-    item.totalMints += 1;
-    item.uniqueMinters.add(recipient);
-    item.lastSeenBlock = log.blockNumber;
+    const entry = contractMap.get(contract);
+    entry.recentMints += 1;
+    if (minter) entry.uniqueMinters.add(minter);
+    if (log.transactionHash) entry.txHashes.add(log.transactionHash);
+    if (log.blockNumber > entry.latestBlock) {
+      entry.latestBlock = log.blockNumber;
+    }
   }
 
-  const results = Array.from(stats.values()).map((s) => ({
-    contract: s.contract,
-    totalMints: s.totalMints,
-    uniqueMinters: s.uniqueMinters.size,
-    mintVelocity: s.totalMints / Number(blockRange),
+  // Filter and format active mints
+  const activeMints = Array.from(contractMap.values()).map((entry) => ({
+    contract: entry.contract,
+    recentMints: entry.recentMints,
+    uniqueMinters: entry.uniqueMinters.size,
+    latestMintBlock: Number(entry.latestBlock),
+    blocksSinceLastMint: Number(currentBlock - entry.latestBlock),
+    velocityPerBlock: (entry.recentMints / Number(blockRange)).toFixed(3),
+    openSeaUrl: `https://opensea.io/assets/robinhood/${entry.contract}`,
   }));
 
-  // Sort by highest velocity
-  results.sort((a, b) => b.totalMints - a.totalMints);
-  return results;
-}
+  // Sort by highest activity/velocity
+  activeMints.sort((a, b) => b.recentMints - a.recentMints);
 
+  return {
+    scannedBlocks: Number(blockRange),
+    latestBlock: Number(currentBlock),
+    activeMints,
+  };
+}
