@@ -29,4 +29,3 @@ Activate when the user asks:
 - **Chain ID**: `4663`
 - **RPC**: Robinhood Chain Node / RPC
 - **Explorer**: Robinhood Chain Explorer
-
