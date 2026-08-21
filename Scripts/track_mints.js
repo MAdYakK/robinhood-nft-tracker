@@ -8,7 +8,7 @@ const robinhoodChain = {
   network: 'robinhood',
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   rpcUrls: {
-    default: { http: [process.env.ROBINHOOD_RPC_URL || 'https://rpc.robinhood.com'] },
+    default: { http: [process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com'] },
   },
 };
 
